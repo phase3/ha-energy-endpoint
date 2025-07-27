@@ -300,7 +300,7 @@ class EnergyMetricsCoordinator(DataUpdateCoordinator):
                 }
                 
                 _LOGGER.debug("Importing %d energy statistics to Home Assistant", len(energy_statistics))
-                await async_add_external_statistics(self.hass, energy_metadata, energy_statistics)
+                async_add_external_statistics(self.hass, energy_metadata, energy_statistics)
                 _LOGGER.info("Successfully imported %d energy statistics", len(energy_statistics))
             
             # Import temperature statistics
@@ -315,7 +315,7 @@ class EnergyMetricsCoordinator(DataUpdateCoordinator):
                 }
                 
                 _LOGGER.debug("Importing %d temperature statistics to Home Assistant", len(temperature_statistics))
-                await async_add_external_statistics(self.hass, temp_metadata, temperature_statistics)
+                async_add_external_statistics(self.hass, temp_metadata, temperature_statistics)
                 _LOGGER.info("Successfully imported %d temperature statistics", len(temperature_statistics))
                 
         except Exception as err:
