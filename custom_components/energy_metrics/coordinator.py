@@ -33,97 +33,202 @@ class EnergyMetricsCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> Dict[str, Any]:
         """Update data from storage."""
-        async with self._lock:
-            stored_data = await self.store.async_load()
-            if stored_data:
-                self._data = stored_data
-            return self._data
+        try:
+            async with self._lock:
+                _LOGGER.debug("Loading data from storage")
+                stored_data = await self.store.async_load()
+                if stored_data:
+                    self._data = stored_data
+                    metrics_count = len(stored_data.get("metrics", {}))
+                    _LOGGER.debug("Loaded %d metrics from storage", metrics_count)
+                else:
+                    _LOGGER.debug("No stored data found, initializing empty dataset")
+                    self._data = {}
+                return self._data
+        except Exception as err:
+            _LOGGER.error("Failed to load data from storage: %s", err)
+            self.last_update_success = False
+            raise
 
     async def async_add_metrics(self, metrics_data: List[Dict[str, Any]]) -> bool:
         """Add or update energy metrics data."""
+        if not metrics_data:
+            _LOGGER.warning("No metrics data provided")
+            return False
+            
+        _LOGGER.info("Processing %d metrics for storage", len(metrics_data))
+        
         async with self._lock:
             try:
                 # Load existing data
                 stored_data = await self.store.async_load() or {}
                 metrics = stored_data.get("metrics", {})
+                initial_count = len(metrics)
                 
                 updated = False
-                for metric in metrics_data:
-                    timestamp = metric.get("timestamp")
-                    if not timestamp:
-                        _LOGGER.warning("Metric missing timestamp: %s", metric)
-                        continue
-                    
-                    # Parse timestamp if it's a string
-                    if isinstance(timestamp, str):
-                        try:
-                            timestamp = dt_util.parse_datetime(timestamp)
-                        except Exception as err:
-                            _LOGGER.error("Invalid timestamp format %s: %s", timestamp, err)
+                processed_count = 0
+                error_count = 0
+                
+                for i, metric in enumerate(metrics_data):
+                    try:
+                        timestamp = metric.get("timestamp")
+                        if not timestamp:
+                            _LOGGER.warning("Metric at index %d missing timestamp: %s", i, metric)
+                            error_count += 1
                             continue
-                    
-                    # Convert to ISO string for consistent storage
-                    timestamp_key = timestamp.isoformat()
-                    
-                    # Store or update the metric
-                    if timestamp_key not in metrics or metrics[timestamp_key] != metric:
-                        metrics[timestamp_key] = {
+                        
+                        # Parse timestamp if it's a string
+                        if isinstance(timestamp, str):
+                            try:
+                                timestamp = dt_util.parse_datetime(timestamp)
+                                if not timestamp:
+                                    _LOGGER.error("Failed to parse timestamp at index %d: %s", i, metric.get("timestamp"))
+                                    error_count += 1
+                                    continue
+                            except Exception as parse_err:
+                                _LOGGER.error("Invalid timestamp format at index %d (%s): %s", i, metric.get("timestamp"), parse_err)
+                                error_count += 1
+                                continue
+                        
+                        # Convert to ISO string for consistent storage
+                        timestamp_key = timestamp.isoformat()
+                        
+                        # Validate data fields
+                        meter_value = metric.get("meter_value")
+                        average_value = metric.get("average_value")
+                        temperature = metric.get("temperature")
+                        
+                        # Log if all data fields are None
+                        if all(v is None for v in [meter_value, average_value, temperature]):
+                            _LOGGER.warning("Metric at index %d has no data values (meter_value, average_value, temperature all None)", i)
+                        
+                        # Store or update the metric (check if different for efficiency)
+                        new_metric_data = {
                             "timestamp": timestamp_key,
-                            "meter_value": metric.get("meter_value"),
-                            "average_value": metric.get("average_value"), 
-                            "temperature": metric.get("temperature"),
+                            "meter_value": meter_value,
+                            "average_value": average_value,
+                            "temperature": temperature,
                             "created_at": dt_util.utcnow().isoformat(),
                         }
-                        updated = True
+                        
+                        # Check if this is a new entry or an update
+                        is_new = timestamp_key not in metrics
+                        is_different = not is_new and metrics[timestamp_key] != new_metric_data
+                        
+                        if is_new or is_different:
+                            metrics[timestamp_key] = new_metric_data
+                            updated = True
+                            if is_new:
+                                _LOGGER.debug("Added new metric for timestamp %s", timestamp_key)
+                            else:
+                                _LOGGER.debug("Updated existing metric for timestamp %s", timestamp_key)
+                        
+                        processed_count += 1
+                        
+                    except Exception as metric_err:
+                        _LOGGER.error("Error processing metric at index %d: %s. Metric data: %s", i, metric_err, metric)
+                        error_count += 1
+                        continue
                 
                 if updated:
-                    # Save updated data
-                    stored_data["metrics"] = metrics
-                    stored_data["last_updated"] = dt_util.utcnow().isoformat()
-                    await self.store.async_save(stored_data)
-                    
-                    # Update coordinator data
-                    self._data = stored_data
-                    
-                    # Notify listeners
-                    self.async_set_updated_data(self._data)
+                    try:
+                        # Save updated data
+                        stored_data["metrics"] = metrics
+                        stored_data["last_updated"] = dt_util.utcnow().isoformat()
+                        await self.store.async_save(stored_data)
+                        
+                        final_count = len(metrics)
+                        _LOGGER.info("Storage updated successfully. Metrics count: %d -> %d. Processed: %d, Errors: %d", 
+                                   initial_count, final_count, processed_count, error_count)
+                        
+                        # Update coordinator data
+                        self._data = stored_data
+                        
+                        # Notify listeners
+                        self.async_set_updated_data(self._data)
+                        
+                    except Exception as save_err:
+                        _LOGGER.error("Failed to save metrics to storage: %s", save_err)
+                        return False
+                else:
+                    _LOGGER.info("No metrics needed updating. Processed: %d, Errors: %d", processed_count, error_count)
                 
-                return updated
+                # Return True if we processed at least some metrics successfully
+                return processed_count > 0
                 
             except Exception as err:
-                _LOGGER.error("Error adding metrics: %s", err)
+                _LOGGER.error("Critical error in async_add_metrics: %s", err, exc_info=True)
                 return False
 
     async def async_get_latest_metrics(self) -> Optional[Dict[str, Any]]:
         """Get the latest metric entry."""
-        async with self._lock:
-            stored_data = await self.store.async_load() or {}
-            metrics = stored_data.get("metrics", {})
-            
-            if not metrics:
-                return None
-            
-            # Get the most recent entry
-            latest_timestamp = max(metrics.keys())
-            return metrics[latest_timestamp]
+        try:
+            async with self._lock:
+                stored_data = await self.store.async_load() or {}
+                metrics = stored_data.get("metrics", {})
+                
+                if not metrics:
+                    _LOGGER.debug("No metrics found in storage")
+                    return None
+                
+                try:
+                    # Get the most recent entry
+                    latest_timestamp = max(metrics.keys())
+                    latest_metric = metrics[latest_timestamp]
+                    _LOGGER.debug("Retrieved latest metric for timestamp %s", latest_timestamp)
+                    return latest_metric
+                except ValueError as err:
+                    _LOGGER.error("Error finding latest metric (empty metrics?): %s", err)
+                    return None
+                    
+        except Exception as err:
+            _LOGGER.error("Error retrieving latest metrics: %s", err)
+            return None
 
     async def async_get_metrics_range(
         self, start_time: datetime, end_time: datetime
     ) -> List[Dict[str, Any]]:
         """Get metrics within a time range."""
-        async with self._lock:
-            stored_data = await self.store.async_load() or {}
-            metrics = stored_data.get("metrics", {})
+        if start_time > end_time:
+            _LOGGER.error("Invalid time range: start_time (%s) is after end_time (%s)", start_time, end_time)
+            return []
             
-            filtered_metrics = []
-            for timestamp_str, metric in metrics.items():
+        _LOGGER.debug("Retrieving metrics from %s to %s", start_time, end_time)
+        
+        try:
+            async with self._lock:
+                stored_data = await self.store.async_load() or {}
+                metrics = stored_data.get("metrics", {})
+                
+                if not metrics:
+                    _LOGGER.debug("No metrics found in storage for range query")
+                    return []
+                
+                filtered_metrics = []
+                parse_errors = 0
+                
+                for timestamp_str, metric in metrics.items():
+                    try:
+                        metric_time = dt_util.parse_datetime(timestamp_str)
+                        if metric_time and start_time <= metric_time <= end_time:
+                            filtered_metrics.append(metric)
+                    except Exception as err:
+                        _LOGGER.error("Error parsing timestamp %s: %s", timestamp_str, err)
+                        parse_errors += 1
+                        continue
+                
+                if parse_errors > 0:
+                    _LOGGER.warning("Encountered %d timestamp parsing errors during range query", parse_errors)
+                
+                # Sort by timestamp
                 try:
-                    metric_time = dt_util.parse_datetime(timestamp_str)
-                    if start_time <= metric_time <= end_time:
-                        filtered_metrics.append(metric)
-                except Exception as err:
-                    _LOGGER.error("Error parsing timestamp %s: %s", timestamp_str, err)
-            
-            # Sort by timestamp
-            filtered_metrics.sort(key=lambda x: x["timestamp"])
-            return filtered_metrics
+                    filtered_metrics.sort(key=lambda x: x["timestamp"])
+                except KeyError as err:
+                    _LOGGER.error("Error sorting metrics by timestamp: %s", err)
+                
+                _LOGGER.debug("Retrieved %d metrics in range %s to %s", len(filtered_metrics), start_time, end_time)
+                return filtered_metrics
+                
+        except Exception as err:
+            _LOGGER.error("Error retrieving metrics range: %s", err, exc_info=True)
+            return []
