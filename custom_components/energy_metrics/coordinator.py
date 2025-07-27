@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
+from homeassistant.components.recorder.statistics import async_add_external_statistics
 
 from .const import DOMAIN, DEFAULT_SCAN_INTERVAL
 
@@ -144,6 +145,9 @@ class EnergyMetricsCoordinator(DataUpdateCoordinator):
                         # Update coordinator data
                         self._data = stored_data
                         
+                        # Import new/updated metrics to Home Assistant statistics system
+                        await self._import_metrics_to_statistics(metrics_data)
+                        
                         # Notify listeners
                         self.async_set_updated_data(self._data)
                         
@@ -232,3 +236,78 @@ class EnergyMetricsCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.error("Error retrieving metrics range: %s", err, exc_info=True)
             return []
+
+    async def _import_metrics_to_statistics(self, metrics_data: List[Dict[str, Any]]) -> None:
+        """Import metrics data to Home Assistant statistics system."""
+        try:
+            # Prepare statistics for energy meter (cumulative)
+            energy_statistics = []
+            temperature_statistics = []
+            
+            # Sort metrics by timestamp to ensure proper order
+            sorted_metrics = sorted(metrics_data, key=lambda x: dt_util.parse_datetime(x.get("timestamp")))
+            
+            for metric in sorted_metrics:
+                timestamp = metric.get("timestamp")
+                if isinstance(timestamp, str):
+                    timestamp = dt_util.parse_datetime(timestamp)
+                
+                if not timestamp:
+                    continue
+                
+                # Round timestamp to the hour (Home Assistant statistics requirement)
+                timestamp = timestamp.replace(minute=0, second=0, microsecond=0)
+                
+                # Energy meter statistics (cumulative)
+                meter_value = metric.get("meter_value")
+                if meter_value is not None:
+                    energy_stat = {
+                        "start": timestamp,
+                        "sum": float(meter_value),  # Cumulative energy reading
+                        "state": float(meter_value),  # Current state
+                    }
+                    energy_statistics.append(energy_stat)
+                
+                # Temperature statistics
+                temperature = metric.get("temperature")
+                if temperature is not None:
+                    temp_stat = {
+                        "start": timestamp,
+                        "mean": float(temperature),  # Average temperature
+                        "min": float(temperature),   # Could be actual min if available
+                        "max": float(temperature),   # Could be actual max if available
+                    }
+                    temperature_statistics.append(temp_stat)
+            
+            # Import energy statistics
+            if energy_statistics:
+                energy_metadata = {
+                    "source": DOMAIN,
+                    "statistic_id": f"{DOMAIN}:energy_total",
+                    "unit_of_measurement": "kWh",
+                    "has_mean": False,
+                    "has_sum": True,
+                    "name": "Energy Consumption Total",
+                }
+                
+                _LOGGER.debug("Importing %d energy statistics to Home Assistant", len(energy_statistics))
+                await async_add_external_statistics(self.hass, energy_metadata, energy_statistics)
+                _LOGGER.info("Successfully imported %d energy statistics", len(energy_statistics))
+            
+            # Import temperature statistics
+            if temperature_statistics:
+                temp_metadata = {
+                    "source": DOMAIN,
+                    "statistic_id": f"{DOMAIN}:temperature",
+                    "unit_of_measurement": "°F",
+                    "has_mean": True,
+                    "has_sum": False,
+                    "name": "Temperature",
+                }
+                
+                _LOGGER.debug("Importing %d temperature statistics to Home Assistant", len(temperature_statistics))
+                await async_add_external_statistics(self.hass, temp_metadata, temperature_statistics)
+                _LOGGER.info("Successfully imported %d temperature statistics", len(temperature_statistics))
+                
+        except Exception as err:
+            _LOGGER.error("Failed to import metrics to statistics system: %s", err, exc_info=True)

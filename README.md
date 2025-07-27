@@ -99,31 +99,60 @@ curl -X POST \
   }'
 ```
 
-## Sensors
+### Energy Dashboard Integration
 
-The integration creates three sensors:
+After importing data, the historical energy readings will be available in:
+
+1. **Home Assistant Energy Dashboard** - Use `energy_metrics:energy_total` as the energy source
+2. **Statistics graphs** - View long-term trends and analytics
+3. **History panel** - See all imported historical data points
+
+## Sensors and Statistics
+
+The integration creates three sensors and imports historical data to Home Assistant's statistics system:
+
+### Sensors
 
 1. **Energy Meter** (`sensor.energy_meter`)
    - Device Class: `energy`
    - State Class: `total_increasing`
    - Unit: `kWh`
-   - Compatible with Home Assistant Energy feature
+   - Shows current meter reading
 
 2. **Energy Average** (`sensor.energy_average`)
    - Device Class: `energy`
    - State Class: `measurement`
    - Unit: `kWh`
+   - Shows current average consumption
 
 3. **Temperature** (`sensor.temperature`)
    - Device Class: `temperature`
    - State Class: `measurement`
    - Unit: `°F`
+   - Shows current temperature
+
+### Statistics (Energy Dashboard Integration)
+
+Historical data is automatically imported to Home Assistant's statistics system:
+
+1. **Energy Total** (`energy_metrics:energy_total`)
+   - External statistic for cumulative energy consumption
+   - Appears in Home Assistant Energy dashboard
+   - All historical meter readings are imported
+
+2. **Temperature** (`energy_metrics:temperature`)
+   - External statistic for temperature data
+   - Historical temperature readings are imported
 
 ## Data Storage
 
-- Historical data is stored persistently and survives Home Assistant restarts
-- Existing data with the same timestamp will be overwritten
-- Data is stored in Home Assistant's storage system
+- Historical data is stored in two places:
+  1. **Component storage**: For sensor state management and API queries
+  2. **Home Assistant statistics**: For Energy dashboard and long-term analytics
+- Existing data with the same timestamp will be overwritten in both systems
+- Data survives Home Assistant restarts
+- Statistics are automatically imported to Home Assistant's recorder database
+- Historical data appears immediately in the Energy dashboard after import
 
 ## Requirements
 
