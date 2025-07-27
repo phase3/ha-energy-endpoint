@@ -245,7 +245,16 @@ class EnergyMetricsCoordinator(DataUpdateCoordinator):
             temperature_statistics = []
             
             # Sort metrics by timestamp to ensure proper order
-            sorted_metrics = sorted(metrics_data, key=lambda x: dt_util.parse_datetime(x.get("timestamp")))
+            def parse_timestamp_for_sorting(metric):
+                timestamp = metric.get("timestamp")
+                if isinstance(timestamp, str):
+                    return dt_util.parse_datetime(timestamp)
+                elif isinstance(timestamp, datetime):
+                    return timestamp
+                else:
+                    return datetime.min  # Put invalid timestamps at the beginning
+            
+            sorted_metrics = sorted(metrics_data, key=parse_timestamp_for_sorting)
             
             for metric in sorted_metrics:
                 timestamp = metric.get("timestamp")
