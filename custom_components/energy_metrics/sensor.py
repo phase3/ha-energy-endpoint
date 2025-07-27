@@ -192,7 +192,7 @@ class EnergyAverageSensor(EnergyMetricsBaseSensor):
         """Initialize the average energy sensor."""
         super().__init__(coordinator, config_entry, "energy_average")
         self._attr_name = "Energy Average"
-        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_device_class = None  # Generic sensor for average consumption
         self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
         self._attr_suggested_display_precision = 3
